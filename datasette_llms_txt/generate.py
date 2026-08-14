@@ -112,6 +112,14 @@ def _about_lines(meta):
     return ["## About", "", *lines, ""]
 
 
+def _column_description(value):
+    """Datasette allows a column's metadata to be a plain string or a dict
+    with a ``description``/``title`` key. Normalise both to a display string."""
+    if isinstance(value, dict):
+        return value.get("description") or value.get("title") or ""
+    return value or ""
+
+
 def _cell(value):
     if value is None:
         return ""
@@ -253,8 +261,9 @@ async def generate_table(datasette, db_name, table):
         else:
             flags.append("not null" if col.notnull else "nullable")
         line = f"- `{col.name}` — {', '.join(flags)}"
-        if column_meta.get(col.name):
-            line += f" — {column_meta[col.name]}"
+        col_desc = _column_description(column_meta.get(col.name))
+        if col_desc:
+            line += f" — {col_desc}"
         out.append(line)
     out.append("")
 
