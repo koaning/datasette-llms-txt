@@ -1,7 +1,6 @@
 # datasette-llms-txt
 
 [![PyPI](https://img.shields.io/pypi/v/datasette-llms-txt.svg)](https://pypi.org/project/datasette-llms-txt/)
-[![Tests](https://github.com/koaning/datasette-llms-txt/actions/workflows/test.yml/badge.svg)](https://github.com/koaning/datasette-llms-txt/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/koaning/datasette-llms-txt/blob/main/LICENSE)
 
 This plugin generates [llms.txt](https://llmstxt.org/) documentation for a
