@@ -110,17 +110,3 @@ uv run pytest
 ```
 
 Or use the Makefile: `make install` then `make test`.
-
-## Publishing
-
-Build a release and upload it to PyPI with uv:
-
-```bash
-uv build                       # produces dist/*.whl and dist/*.tar.gz
-uv publish --token <pypi-token>   # or set UV_PUBLISH_TOKEN
-```
-
-You can also run `make build` and then `make pypi`. The `make pypi` target
-reads `UV_PUBLISH_TOKEN` from the environment. It is better to publish with the
-GitHub Actions `publish.yml` workflow than to upload by hand. That workflow runs
-when you publish a GitHub Release, and it uses trusted publishing.
