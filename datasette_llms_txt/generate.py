@@ -1,0 +1,307 @@
+"""Deterministic llms.txt generation from Datasette schema introspection.
+
+Each ``generate_*`` coroutine returns a markdown string following the
+https://llmstxt.org/ convention. Human-written descriptions from Datasette
+metadata (``metadata.yaml``/``metadata.json``) are preferred over
+schema-derived text; this is the designed insertion point for a future,
+opt-in LLM-enrichment step.
+"""
+
+from datasette.utils import escape_sqlite
+
+DEFAULT_SAMPLE_ROWS = 5
+
+# Databases Datasette manages internally that we never document.
+HIDDEN_DATABASES = ("_internal", "_memory")
+
+QUERY_HELP = (
+    "Datasette exposes this data over an HTTP API. Append `.json` or `.csv` to "
+    "any table, database or SQL-query URL, or run SQL via `/<db>.json?sql=<query>`. "
+    "To download a whole table cleanly, stream it as CSV with `?_stream=on` (no row "
+    "limit). Per-database and per-table `llms.txt` files, with full-download "
+    "instructions, are linked below."
+)
+
+
+def _plugin_config(datasette):
+    return datasette.plugin_config("datasette-llms-txt") or {}
+
+
+def _sample_rows(datasette):
+    config = _plugin_config(datasette)
+    try:
+        return max(0, int(config.get("sample_rows", DEFAULT_SAMPLE_ROWS)))
+    except (TypeError, ValueError):
+        return DEFAULT_SAMPLE_ROWS
+
+
+def _metadata(datasette):
+    """Return the full metadata dict, tolerant of Datasette API differences."""
+    try:
+        return datasette.metadata() or {}
+    except (TypeError, AttributeError):
+        return {}
+
+
+def _db_metadata(metadata, db_name):
+    return (metadata.get("databases") or {}).get(db_name) or {}
+
+
+def _table_metadata(metadata, db_name, table):
+    return (_db_metadata(metadata, db_name).get("tables") or {}).get(table) or {}
+
+
+def _visible_databases(datasette):
+    return [
+        (name, db)
+        for name, db in datasette.databases.items()
+        if name not in HIDDEN_DATABASES
+    ]
+
+
+def _can_stream_csv(datasette):
+    """CSV streaming (`?_stream=on`) is gated by the allow_csv_stream setting."""
+    return bool(datasette.setting("allow_csv_stream"))
+
+
+def _can_download_db(datasette, db):
+    """Whole-file `.db` download requires an immutable, on-disk database and the
+    allow_download setting (Datasette returns 403 for mutable/in-memory ones)."""
+    return bool(
+        datasette.setting("allow_download")
+        and not db.is_mutable
+        and not db.is_memory
+    )
+
+
+async def _documented_tables(db):
+    """Table names in ``db``, excluding Datasette's hidden/FTS/internal tables."""
+    hidden = set(await db.hidden_table_names())
+    return [name for name in await db.table_names() if name not in hidden]
+
+
+async def _row_count(db, table):
+    try:
+        result = await db.execute(
+            "select count(*) from {}".format(escape_sqlite(table))
+        )
+        return result.single_value()
+    except Exception:
+        return None
+
+
+def _about_lines(meta):
+    """Render source/license metadata as an llms.txt 'Optional' About section."""
+    lines = []
+    source = meta.get("source")
+    source_url = meta.get("source_url")
+    if source or source_url:
+        if source and source_url:
+            lines.append(f"- Source: [{source}]({source_url})")
+        else:
+            lines.append(f"- Source: {source or source_url}")
+    license_ = meta.get("license")
+    license_url = meta.get("license_url")
+    if license_ or license_url:
+        if license_ and license_url:
+            lines.append(f"- License: [{license_}]({license_url})")
+        else:
+            lines.append(f"- License: {license_ or license_url}")
+    if not lines:
+        return []
+    return ["## About", "", *lines, ""]
+
+
+def _cell(value):
+    if value is None:
+        return ""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    return text.replace("|", "\\|")
+
+
+def _markdown_table(columns, rows):
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join(["---"] * len(columns)) + " |",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(_cell(row[c]) for c in columns) + " |")
+    return lines
+
+
+async def generate_index(datasette):
+    metadata = _metadata(datasette)
+    databases = _visible_databases(datasette)
+
+    title = metadata.get("title") or "Datasette"
+    description = metadata.get("description") or (
+        f"A Datasette instance serving {len(databases)} "
+        f"database{'s' if len(databases) != 1 else ''} as queryable data."
+    )
+
+    out = [f"# {title}", "", f"> {description}", "", QUERY_HELP, ""]
+
+    out += ["## Databases", ""]
+    table_index = []  # (db_name, table) collected for the flat table list below
+    for db_name, db in databases:
+        tables = await _documented_tables(db)
+        db_meta = _db_metadata(metadata, db_name)
+        note = db_meta.get("description") or (
+            f"{len(tables)} table{'s' if len(tables) != 1 else ''}"
+        )
+        url = datasette.urls.database(db_name) + "/llms.txt"
+        out.append(f"- [{db_name}]({url}): {note}")
+        table_index += [(db_name, db, t) for t in tables]
+    out.append("")
+
+    if table_index:
+        out += ["## Tables", ""]
+        for db_name, db, table in table_index:
+            columns = await db.table_columns(table)
+            tbl_meta = _table_metadata(metadata, db_name, table)
+            count = await _row_count(db, table)
+            bits = []
+            if count is not None:
+                bits.append(f"{count} rows")
+            if tbl_meta.get("description"):
+                bits.append(tbl_meta["description"])
+            elif columns:
+                bits.append("columns: " + ", ".join(columns))
+            url = datasette.urls.table(db_name, table) + "/llms.txt"
+            note = "; ".join(bits)
+            out.append(f"- [{db_name}/{table}]({url}){': ' + note if note else ''}")
+        out.append("")
+
+    out += _about_lines(metadata)
+    return "\n".join(out).rstrip() + "\n"
+
+
+async def generate_database(datasette, db_name):
+    metadata = _metadata(datasette)
+    db = datasette.databases[db_name]
+    db_meta = _db_metadata(metadata, db_name)
+    tables = await _documented_tables(db)
+
+    description = db_meta.get("description") or (
+        f"Database `{db_name}` with {len(tables)} "
+        f"table{'s' if len(tables) != 1 else ''}."
+    )
+    out = [f"# {db_name}", "", f"> {description}", ""]
+
+    out += ["## Tables", ""]
+    for table in tables:
+        columns = await db.table_columns(table)
+        tbl_meta = _table_metadata(metadata, db_name, table)
+        count = await _row_count(db, table)
+        bits = []
+        if count is not None:
+            bits.append(f"{count} rows")
+        if tbl_meta.get("description"):
+            bits.append(tbl_meta["description"])
+        elif columns:
+            bits.append("columns: " + ", ".join(columns))
+        url = datasette.urls.table(db_name, table) + "/llms.txt"
+        note = "; ".join(bits)
+        out.append(f"- [{table}]({url}){': ' + note if note else ''}")
+    out.append("")
+
+    out += ["## Downloading", ""]
+    if _can_stream_csv(datasette):
+        out.append(
+            f"- Any table as streamed CSV (no row limit): "
+            f"`{datasette.urls.database(db_name)}/<table>.csv?_stream=on`"
+        )
+    if _can_download_db(datasette, db):
+        out.append(
+            f"- The entire SQLite database as a single file: "
+            f"`{datasette.urls.database(db_name)}.db`"
+        )
+    out.append("")
+
+    out += _about_lines({**metadata, **db_meta})
+    return "\n".join(out).rstrip() + "\n"
+
+
+async def generate_table(datasette, db_name, table):
+    metadata = _metadata(datasette)
+    db = datasette.databases[db_name]
+    tbl_meta = _table_metadata(metadata, db_name, table)
+    column_meta = tbl_meta.get("columns") or {}
+
+    columns = await db.table_column_details(table)
+    pks = await db.primary_keys(table)
+    count = await _row_count(db, table)
+
+    description = tbl_meta.get("description") or (
+        f"Table `{table}` with "
+        + (f"{count} rows and " if count is not None else "")
+        + f"{len(columns)} column{'s' if len(columns) != 1 else ''}."
+    )
+    out = [f"# {db_name}/{table}", "", f"> {description}", ""]
+
+    schema = await db.get_table_definition(table)
+    if schema:
+        out += ["## Schema", "", "```sql", schema.strip(), "```", ""]
+    if pks:
+        out += [f"Primary key: {', '.join('`' + pk + '`' for pk in pks)}", ""]
+
+    out += ["## Columns", ""]
+    for col in columns:
+        flags = [col.type or "TEXT"]
+        if col.is_pk:
+            flags.append("primary key")
+        else:
+            flags.append("not null" if col.notnull else "nullable")
+        line = f"- `{col.name}` — {', '.join(flags)}"
+        if column_meta.get(col.name):
+            line += f" — {column_meta[col.name]}"
+        out.append(line)
+    out.append("")
+
+    table_url = datasette.urls.table(db_name, table)
+    db_url = datasette.urls.database(db_name)
+    example_col = columns[0].name if columns else "id"
+    out += [
+        "## Querying",
+        "",
+        f"- JSON rows: `{table_url}.json` (add `?_shape=array` for a plain array)",
+        f"- CSV export: `{table_url}.csv`",
+        f"- Filtered: `{table_url}.json?{example_col}=<value>`",
+        f"- SQL: `{db_url}.json?sql=select * from {escape_sqlite(table)} limit 10`",
+        "",
+    ]
+
+    downloads = ["## Downloading the full dataset", ""]
+    if _can_stream_csv(datasette):
+        downloads.append(
+            f"- All rows as CSV, streamed with no row limit: `{table_url}.csv?_stream=on`"
+        )
+    downloads.append(
+        f"- All rows as JSON: page through `{table_url}.json?_size=max`, following "
+        "the `next_url` field in each response until it is null"
+    )
+    if _can_download_db(datasette, db):
+        downloads.append(
+            f"- The entire SQLite database as a single file: `{db_url}.db`"
+        )
+    downloads.append("")
+    out += downloads
+
+    sample_rows = _sample_rows(datasette)
+    if sample_rows and columns:
+        try:
+            result = await db.execute(
+                "select * from {} limit {}".format(
+                    escape_sqlite(table), sample_rows
+                )
+            )
+            rows = list(result.rows)
+            if rows:
+                col_names = result.columns
+                out += ["## Sample rows", ""]
+                out += _markdown_table(col_names, rows)
+                out.append("")
+        except Exception:
+            pass
+
+    return "\n".join(out).rstrip() + "\n"

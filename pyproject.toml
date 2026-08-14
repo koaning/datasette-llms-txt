@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datasette-llms-txt"
+version = "0.1"
+description = "Automatically generate llms.txt documentation for a Datasette instance"
+readme = "README.md"
+authors = [{name = "koaning"}]
+license = "MIT"
+classifiers = [
+    "Framework :: Datasette",
+]
+requires-python = ">=3.9"
+dependencies = ["datasette"]
+
+[project.urls]
+Homepage = "https://github.com/koaning/datasette-llms-txt"
+Changelog = "https://github.com/koaning/datasette-llms-txt/releases"
+Issues = "https://github.com/koaning/datasette-llms-txt/issues"
+
+[project.entry-points.datasette]
+llms_txt = "datasette_llms_txt"
+
+[project.optional-dependencies]
+test = ["pytest", "pytest-asyncio", "sqlite-utils"]
+
+[tool.setuptools.packages.find]
+include = ["datasette_llms_txt*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
