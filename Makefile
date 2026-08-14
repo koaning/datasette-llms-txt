@@ -1,4 +1,4 @@
-.PHONY: install test serve fixtures build publish clean
+.PHONY: install test serve fixtures build pypi clean
 
 VENV := .venv
 PY := $(VENV)/bin/python
@@ -21,7 +21,7 @@ build:  ## Build the wheel and sdist into dist/
 	rm -rf dist
 	uv build
 
-publish: build  ## Upload the built distributions to PyPI (needs UV_PUBLISH_TOKEN)
+pypi: build  ## Upload the built distributions to PyPI (needs UV_PUBLISH_TOKEN)
 	uv publish
 
 clean:  ## Remove the venv, downloaded db and build artifacts
