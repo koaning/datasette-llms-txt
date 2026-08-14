@@ -107,6 +107,19 @@ async def test_table(db_path, metadata):
 
 
 @pytest.mark.asyncio
+async def test_table_dict_column_metadata(db_path, metadata):
+    # Datasette also allows the dict form: columns: {email: {description: ...}}.
+    metadata["databases"]["demo"]["tables"]["people"]["columns"] = {
+        "email": {"description": "Contact address."}
+    }
+    ds = Datasette([db_path], metadata=metadata)
+    body = (await ds.client.get("/demo/people/llms.txt")).text
+    assert "Contact address." in body
+    # the raw dict must not leak into the rendered output
+    assert "{'description'" not in body
+
+
+@pytest.mark.asyncio
 async def test_db_download_advertised_when_immutable(db_path):
     # An immutable, on-disk database can be downloaded whole; the link should show.
     ds = Datasette(immutables=[db_path])
