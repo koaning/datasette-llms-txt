@@ -23,28 +23,35 @@ datasette install datasette-llms-txt
 
 ## Usage
 
-After you install the plugin, it adds three endpoints:
+After you install the plugin, it adds these endpoints:
 
 | URL | Contents |
 | --- | --- |
 | `/llms.txt` | Instance overview: every database and table, with links and query instructions |
-| `/<db>/llms.txt` | A single database and its tables |
-| `/<db>/<table>/llms.txt` | Full schema, columns, primary keys, query endpoints and sample rows for one table |
+| `/<db>.md` | A single database and its tables |
+| `/<db>/<table>.md` | Full schema, columns, primary keys, query endpoints and sample rows for one table |
+
+The [llms.txt convention](https://llmstxt.org/) asks the index to link to the
+markdown (`.md`) version of each page. The `/llms.txt` index links to the `.md`
+files above.
+
+The plugin also keeps the earlier `/<db>/llms.txt` and `/<db>/<table>/llms.txt`
+endpoints. They serve the same content as the `.md` files.
 
 For example, with a `demo.db` file:
 
 ```bash
 datasette demo.db
 curl http://127.0.0.1:8001/llms.txt
-curl http://127.0.0.1:8001/demo/llms.txt
-curl http://127.0.0.1:8001/demo/people/llms.txt
+curl http://127.0.0.1:8001/demo.md
+curl http://127.0.0.1:8001/demo/people.md
 ```
 
 The plugin also adds a link to `/llms.txt` in Datasette's top-right menu.
 
 ## Downloading data
 
-Each per-table `llms.txt` also shows how to download the data, not only how to
+Each per-table page also shows how to download the data, not only how to
 query it:
 
 - **CSV export**: `/<db>/<table>.csv`
@@ -109,3 +116,19 @@ uv run pytest
 ```
 
 Or use the Makefile: `make install` then `make test`.
+
+### Datasette compatibility
+
+The plugin works on Datasette 0.65 and on Datasette 1.0. Datasette 1.0 changed the
+metadata methods, so the plugin reads the metadata in a way that supports both
+versions.
+
+`make test` runs the suite against both versions:
+
+```bash
+make test
+```
+
+This command builds one environment for each Datasette version and runs the test
+suite in each one. It builds the environments one time and then reuses them. The CI
+workflow runs the same matrix.
