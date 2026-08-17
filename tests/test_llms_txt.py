@@ -2,6 +2,10 @@ import pytest
 import sqlite_utils
 from datasette.app import Datasette
 
+# Datasette 1.0 replaced the sync metadata() method with async getters. Some
+# older metadata *input* shapes cannot be loaded into the 1.0 metadata store.
+HAS_V1_METADATA = hasattr(Datasette, "get_instance_metadata")
+
 
 @pytest.fixture
 def db_path(tmp_path):
@@ -56,9 +60,9 @@ async def test_index(db_path, metadata):
     assert "> Example instance." in body
     assert "## Databases" in body
     assert "## Tables" in body
-    assert "[demo](/demo/llms.txt)" in body
-    assert "[demo/people](/demo/people/llms.txt)" in body
-    assert "[demo/dogs](/demo/dogs/llms.txt)" in body
+    assert "[demo](/demo.md)" in body
+    assert "[demo/people](/demo/people.md)" in body
+    assert "[demo/dogs](/demo/dogs.md)" in body
     # source/license surfaced as an About section
     assert "## About" in body
     assert "[ACME](https://example.com)" in body
@@ -72,8 +76,8 @@ async def test_database(db_path, metadata):
     assert response.status_code == 200
     body = response.text
     assert body.startswith("# demo")
-    assert "[people](/demo/people/llms.txt)" in body
-    assert "[dogs](/demo/dogs/llms.txt)" in body
+    assert "[people](/demo/people.md)" in body
+    assert "[dogs](/demo/dogs.md)" in body
     # metadata table description preferred over the column fallback
     assert "One row per person." in body
 
@@ -106,6 +110,11 @@ async def test_table(db_path, metadata):
     assert "Ada" in body
 
 
+@pytest.mark.skipif(
+    HAS_V1_METADATA,
+    reason="dict-form column metadata is a Datasette <1.0 input shape; "
+    "the 1.0 metadata store cannot load nested dict column values",
+)
 @pytest.mark.asyncio
 async def test_table_dict_column_metadata(db_path, metadata):
     # Datasette also allows the dict form: columns: {email: {description: ...}}.
@@ -136,6 +145,37 @@ async def test_route_precedence(db_path):
     response = await ds.client.get("/demo/llms.txt")
     assert response.status_code == 200
     assert response.text.startswith("# demo")
+
+
+@pytest.mark.asyncio
+async def test_markdown_endpoints(db_path, metadata):
+    """`.md` resource pages serve markdown and match their `llms.txt` twins."""
+    ds = Datasette([db_path], metadata=metadata)
+
+    db_md = await ds.client.get("/demo.md")
+    assert db_md.status_code == 200
+    assert db_md.headers["content-type"].startswith("text/markdown")
+    assert db_md.text == (await ds.client.get("/demo/llms.txt")).text
+
+    table_md = await ds.client.get("/demo/people.md")
+    assert table_md.status_code == 200
+    assert table_md.headers["content-type"].startswith("text/markdown")
+    assert table_md.text == (await ds.client.get("/demo/people/llms.txt")).text
+
+
+@pytest.mark.asyncio
+async def test_llms_txt_routes_still_work(db_path):
+    """The nested `llms.txt` routes remain for back-compat."""
+    ds = Datasette([db_path])
+    assert (await ds.client.get("/demo/llms.txt")).status_code == 200
+    assert (await ds.client.get("/demo/people/llms.txt")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_markdown_not_found(db_path):
+    ds = Datasette([db_path])
+    assert (await ds.client.get("/nope.md")).status_code == 404
+    assert (await ds.client.get("/demo/nope.md")).status_code == 404
 
 
 @pytest.mark.asyncio

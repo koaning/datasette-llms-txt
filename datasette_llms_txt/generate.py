@@ -18,7 +18,7 @@ QUERY_HELP = (
     "Datasette exposes this data over an HTTP API. Append `.json` or `.csv` to "
     "any table, database or SQL-query URL, or run SQL via `/<db>.json?sql=<query>`. "
     "To download a whole table cleanly, stream it as CSV with `?_stream=on` (no row "
-    "limit). Per-database and per-table `llms.txt` files, with full-download "
+    "limit). Per-database and per-table markdown (`.md`) files, with full-download "
     "instructions, are linked below."
 )
 
@@ -35,20 +35,39 @@ def _sample_rows(datasette):
         return DEFAULT_SAMPLE_ROWS
 
 
-def _metadata(datasette):
-    """Return the full metadata dict, tolerant of Datasette API differences."""
-    try:
-        return datasette.metadata() or {}
-    except (TypeError, AttributeError):
-        return {}
+def _supports_async_metadata(datasette):
+    """Datasette 1.0 removed the synchronous ``metadata()`` method and replaced
+    it with per-scope async getters (``get_instance_metadata`` and friends)."""
+    return hasattr(datasette, "get_instance_metadata")
 
 
-def _db_metadata(metadata, db_name):
-    return (metadata.get("databases") or {}).get(db_name) or {}
+def _legacy_metadata(datasette):
+    """Full metadata dict on Datasette < 1.0.
+
+    Only the callers' ``< 1.0`` branch reaches this, so ``metadata()`` is always
+    present here (Datasette 1.0 removed it; that path uses the async getters).
+    """
+    return datasette.metadata() or {}
 
 
-def _table_metadata(metadata, db_name, table):
-    return (_db_metadata(metadata, db_name).get("tables") or {}).get(table) or {}
+async def _instance_metadata(datasette):
+    """Instance-level metadata (title, description, source, license)."""
+    if _supports_async_metadata(datasette):
+        return await datasette.get_instance_metadata() or {}
+    return _legacy_metadata(datasette)
+
+
+async def _db_metadata(datasette, db_name):
+    if _supports_async_metadata(datasette):
+        return await datasette.get_database_metadata(db_name) or {}
+    return (_legacy_metadata(datasette).get("databases") or {}).get(db_name) or {}
+
+
+async def _table_metadata(datasette, db_name, table):
+    if _supports_async_metadata(datasette):
+        return await datasette.get_resource_metadata(db_name, table) or {}
+    db_meta = (_legacy_metadata(datasette).get("databases") or {}).get(db_name) or {}
+    return (db_meta.get("tables") or {}).get(table) or {}
 
 
 def _visible_databases(datasette):
@@ -112,12 +131,25 @@ def _about_lines(meta):
     return ["## About", "", *lines, ""]
 
 
-def _column_description(value):
+def _normalise_column_description(value):
     """Datasette allows a column's metadata to be a plain string or a dict
     with a ``description``/``title`` key. Normalise both to a display string."""
     if isinstance(value, dict):
         return value.get("description") or value.get("title") or ""
     return value or ""
+
+
+async def _column_description(datasette, db_name, table, column, table_meta):
+    """Human-written description for a single column, across Datasette versions.
+
+    On Datasette 1.0 column metadata lives behind ``get_column_metadata``. On
+    older versions it is nested under the table's ``columns`` key (``table_meta``).
+    """
+    if _supports_async_metadata(datasette):
+        value = await datasette.get_column_metadata(db_name, table, column) or {}
+    else:
+        value = (table_meta.get("columns") or {}).get(column)
+    return _normalise_column_description(value)
 
 
 def _cell(value):
@@ -138,7 +170,7 @@ def _markdown_table(columns, rows):
 
 
 async def generate_index(datasette):
-    metadata = _metadata(datasette)
+    metadata = await _instance_metadata(datasette)
     databases = _visible_databases(datasette)
 
     title = metadata.get("title") or "Datasette"
@@ -153,11 +185,11 @@ async def generate_index(datasette):
     table_index = []  # (db_name, table) collected for the flat table list below
     for db_name, db in databases:
         tables = await _documented_tables(db)
-        db_meta = _db_metadata(metadata, db_name)
+        db_meta = await _db_metadata(datasette, db_name)
         note = db_meta.get("description") or (
             f"{len(tables)} table{'s' if len(tables) != 1 else ''}"
         )
-        url = datasette.urls.database(db_name) + "/llms.txt"
+        url = datasette.urls.database(db_name) + ".md"
         out.append(f"- [{db_name}]({url}): {note}")
         table_index += [(db_name, db, t) for t in tables]
     out.append("")
@@ -166,7 +198,7 @@ async def generate_index(datasette):
         out += ["## Tables", ""]
         for db_name, db, table in table_index:
             columns = await db.table_columns(table)
-            tbl_meta = _table_metadata(metadata, db_name, table)
+            tbl_meta = await _table_metadata(datasette, db_name, table)
             count = await _row_count(db, table)
             bits = []
             if count is not None:
@@ -175,7 +207,7 @@ async def generate_index(datasette):
                 bits.append(tbl_meta["description"])
             elif columns:
                 bits.append("columns: " + ", ".join(columns))
-            url = datasette.urls.table(db_name, table) + "/llms.txt"
+            url = datasette.urls.table(db_name, table) + ".md"
             note = "; ".join(bits)
             out.append(f"- [{db_name}/{table}]({url}){': ' + note if note else ''}")
         out.append("")
@@ -185,9 +217,9 @@ async def generate_index(datasette):
 
 
 async def generate_database(datasette, db_name):
-    metadata = _metadata(datasette)
+    instance_meta = await _instance_metadata(datasette)
     db = datasette.databases[db_name]
-    db_meta = _db_metadata(metadata, db_name)
+    db_meta = await _db_metadata(datasette, db_name)
     tables = await _documented_tables(db)
 
     description = db_meta.get("description") or (
@@ -199,7 +231,7 @@ async def generate_database(datasette, db_name):
     out += ["## Tables", ""]
     for table in tables:
         columns = await db.table_columns(table)
-        tbl_meta = _table_metadata(metadata, db_name, table)
+        tbl_meta = await _table_metadata(datasette, db_name, table)
         count = await _row_count(db, table)
         bits = []
         if count is not None:
@@ -208,7 +240,7 @@ async def generate_database(datasette, db_name):
             bits.append(tbl_meta["description"])
         elif columns:
             bits.append("columns: " + ", ".join(columns))
-        url = datasette.urls.table(db_name, table) + "/llms.txt"
+        url = datasette.urls.table(db_name, table) + ".md"
         note = "; ".join(bits)
         out.append(f"- [{table}]({url}){': ' + note if note else ''}")
     out.append("")
@@ -226,15 +258,13 @@ async def generate_database(datasette, db_name):
         )
     out.append("")
 
-    out += _about_lines({**metadata, **db_meta})
+    out += _about_lines({**instance_meta, **db_meta})
     return "\n".join(out).rstrip() + "\n"
 
 
 async def generate_table(datasette, db_name, table):
-    metadata = _metadata(datasette)
     db = datasette.databases[db_name]
-    tbl_meta = _table_metadata(metadata, db_name, table)
-    column_meta = tbl_meta.get("columns") or {}
+    tbl_meta = await _table_metadata(datasette, db_name, table)
 
     columns = await db.table_column_details(table)
     pks = await db.primary_keys(table)
@@ -261,7 +291,9 @@ async def generate_table(datasette, db_name, table):
         else:
             flags.append("not null" if col.notnull else "nullable")
         line = f"- `{col.name}` — {', '.join(flags)}"
-        col_desc = _column_description(column_meta.get(col.name))
+        col_desc = await _column_description(
+            datasette, db_name, table, col.name, tbl_meta
+        )
         if col_desc:
             line += f" — {col_desc}"
         out.append(line)

@@ -9,9 +9,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        # Oldest supported (matches requires-python) and newest stable.
+        # Oldest supported Python (matches requires-python) and newest stable.
         python-version: ["3.10", "3.13"]
+        # Oldest supported Datasette line (0.65.x) and the 1.0 alpha.
+        datasette-version: ["<1.0", ">=1.0a0"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python ${{ matrix.python-version }}
@@ -21,6 +24,10 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install dependencies
-        run: pip install -e '.[test]'
+        run: |
+          pip install -e '.[test]'
+          pip install 'datasette${{ matrix.datasette-version }}'
+      - name: Show Datasette version
+        run: datasette --version
       - name: Run tests
         run: pytest
