@@ -169,7 +169,45 @@ def _markdown_table(columns, rows):
     return lines
 
 
-async def generate_index(datasette):
+def _instance_base_url(datasette, request):
+    """Absolute instance root (scheme + host, including any ``base_url`` prefix).
+
+    This is the first argument to ``moutils`` ``DatasetteConnection``. It uses the
+    same request-based mechanism as every other absolute link Datasette builds.
+    """
+    return datasette.absolute_url(request, datasette.urls.path("/")).rstrip("/")
+
+
+def _marimo_lines(base_url, db_name, table=None):
+    """A ``## Analyze in a marimo notebook`` section.
+
+    It shows a ``moutils`` ``DatasetteConnection`` and a SQL-cell example. When a
+    table is given, the SQL example queries that table; otherwise it uses a
+    ``<table>`` placeholder.
+    """
+    return [
+        "## Analyze in a marimo notebook",
+        "",
+        "You can query this data in a [marimo](https://marimo.io) notebook with a "
+        "SQL cell. Install `moutils[db]`, then open a Python cell and connect:",
+        "",
+        "```python",
+        "from moutils.db.datasette import DatasetteConnection",
+        "",
+        f'datasette = DatasetteConnection("{base_url}", "{db_name}")',
+        "```",
+        "",
+        "marimo shows `datasette` as a SQL engine. Add a SQL cell and query the "
+        "data:",
+        "",
+        "```sql",
+        f"SELECT * FROM {table if table else '<table>'} LIMIT 10",
+        "```",
+        "",
+    ]
+
+
+async def generate_index(datasette, request):
     metadata = await _instance_metadata(datasette)
     databases = _visible_databases(datasette)
 
@@ -212,11 +250,15 @@ async def generate_index(datasette):
             out.append(f"- [{db_name}/{table}]({url}){': ' + note if note else ''}")
         out.append("")
 
+    if databases:
+        base_url = _instance_base_url(datasette, request)
+        out += _marimo_lines(base_url, databases[0][0])
+
     out += _about_lines(metadata)
     return "\n".join(out).rstrip() + "\n"
 
 
-async def generate_database(datasette, db_name):
+async def generate_database(datasette, db_name, request):
     instance_meta = await _instance_metadata(datasette)
     db = datasette.databases[db_name]
     db_meta = await _db_metadata(datasette, db_name)
@@ -258,16 +300,18 @@ async def generate_database(datasette, db_name):
         )
     out.append("")
 
+    base_url = _instance_base_url(datasette, request)
+    out += _marimo_lines(base_url, db_name)
+
     out += _about_lines({**instance_meta, **db_meta})
     return "\n".join(out).rstrip() + "\n"
 
 
-async def generate_table(datasette, db_name, table):
+async def generate_table(datasette, db_name, table, request):
     db = datasette.databases[db_name]
     tbl_meta = await _table_metadata(datasette, db_name, table)
 
     columns = await db.table_column_details(table)
-    pks = await db.primary_keys(table)
     count = await _row_count(db, table)
 
     description = tbl_meta.get("description") or (
@@ -280,24 +324,18 @@ async def generate_table(datasette, db_name, table):
     schema = await db.get_table_definition(table)
     if schema:
         out += ["## Schema", "", "```sql", schema.strip(), "```", ""]
-    if pks:
-        out += [f"Primary key: {', '.join('`' + pk + '`' for pk in pks)}", ""]
 
-    out += ["## Columns", ""]
+    # The schema block already lists column names, types, and keys. Only add
+    # per-column notes for the human descriptions the schema cannot carry.
+    notes = []
     for col in columns:
-        flags = [col.type or "TEXT"]
-        if col.is_pk:
-            flags.append("primary key")
-        else:
-            flags.append("not null" if col.notnull else "nullable")
-        line = f"- `{col.name}` — {', '.join(flags)}"
         col_desc = await _column_description(
             datasette, db_name, table, col.name, tbl_meta
         )
         if col_desc:
-            line += f" — {col_desc}"
-        out.append(line)
-    out.append("")
+            notes.append(f"- `{col.name}` — {col_desc}")
+    if notes:
+        out += ["## Column notes", "", *notes, ""]
 
     table_url = datasette.urls.table(db_name, table)
     db_url = datasette.urls.database(db_name)
@@ -312,21 +350,20 @@ async def generate_table(datasette, db_name, table):
         "",
     ]
 
-    downloads = ["## Downloading the full dataset", ""]
+    base_url = _instance_base_url(datasette, request)
+    out += _marimo_lines(base_url, db_name, table)
+
+    downloads = []
     if _can_stream_csv(datasette):
         downloads.append(
             f"- All rows as CSV, streamed with no row limit: `{table_url}.csv?_stream=on`"
         )
-    downloads.append(
-        f"- All rows as JSON: page through `{table_url}.json?_size=max`, following "
-        "the `next_url` field in each response until it is null"
-    )
     if _can_download_db(datasette, db):
         downloads.append(
             f"- The entire SQLite database as a single file: `{db_url}.db`"
         )
-    downloads.append("")
-    out += downloads
+    if downloads:
+        out += ["## Downloading the full dataset", "", *downloads, ""]
 
     sample_rows = _sample_rows(datasette)
     if sample_rows and columns:
