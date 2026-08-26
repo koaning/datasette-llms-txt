@@ -63,6 +63,9 @@ async def test_index(db_path, metadata):
     assert "[demo](/demo.md)" in body
     assert "[demo/people](/demo/people.md)" in body
     assert "[demo/dogs](/demo/dogs.md)" in body
+    # marimo analysis section with a concrete connection to the first database
+    assert "## Analyze in a marimo notebook" in body
+    assert 'DatasetteConnection("http://localhost", "demo")' in body
     # source/license surfaced as an About section
     assert "## About" in body
     assert "[ACME](https://example.com)" in body
@@ -80,6 +83,10 @@ async def test_database(db_path, metadata):
     assert "[dogs](/demo/dogs.md)" in body
     # metadata table description preferred over the column fallback
     assert "One row per person." in body
+    # marimo analysis section with a concrete connection to this database
+    assert "## Analyze in a marimo notebook" in body
+    assert "from moutils.db.datasette import DatasetteConnection" in body
+    assert 'DatasetteConnection("http://localhost", "demo")' in body
 
 
 @pytest.mark.asyncio
@@ -90,24 +97,38 @@ async def test_table(db_path, metadata):
     body = response.text
     assert body.startswith("# demo/people")
     assert "> One row per person." in body
+    # the CREATE TABLE schema is the single source of structure
     assert "CREATE TABLE" in body
-    assert "Primary key: `id`" in body
-    assert "## Columns" in body
-    assert "`name`" in body
-    # column description from metadata appears on the email line
-    assert "`email`" in body
-    assert "Contact address." in body
+    # column notes carry only the human descriptions, not a schema restatement
+    assert "## Column notes" in body
+    assert "`email` — Contact address." in body
+    # types, nullability, and the primary key live only in the schema block
+    assert "## Columns" not in body
+    assert "Primary key:" not in body
+    assert "nullable" not in body
     assert "## Querying" in body
     assert "/demo/people.json" in body
     # CSV export and full-dataset download guidance
     assert "/demo/people.csv" in body
     assert "## Downloading the full dataset" in body
     assert "/demo/people.csv?_stream=on" in body
+    # the JSON paging option is not offered; CSV is the lightweight full download
+    assert "_size=max" not in body
+    assert "next_url" not in body
     # db is mutable in tests, so the whole-file .db download is not advertised
     assert "/demo.db`" not in body
     # sample rows present by default
     assert "## Sample rows" in body
     assert "Ada" in body
+
+
+@pytest.mark.asyncio
+async def test_column_notes_omitted_without_descriptions(db_path):
+    """With no column metadata, the schema is enough; add no column notes."""
+    ds = Datasette([db_path])
+    body = (await ds.client.get("/demo/people/llms.txt")).text
+    assert "CREATE TABLE" in body
+    assert "## Column notes" not in body
 
 
 @pytest.mark.skipif(
@@ -203,6 +224,40 @@ async def test_not_found(db_path):
     ds = Datasette([db_path])
     assert (await ds.client.get("/nope/llms.txt")).status_code == 404
     assert (await ds.client.get("/demo/nope/llms.txt")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_marimo_section_on_table(db_path):
+    """The table page explains marimo analysis with a table-specific SQL cell."""
+    ds = Datasette([db_path])
+    body = (await ds.client.get("/demo/people/llms.txt")).text
+    assert "## Analyze in a marimo notebook" in body
+    assert "moutils[db]" in body
+    assert "from moutils.db.datasette import DatasetteConnection" in body
+    # the connection uses the real request host and this database
+    assert 'DatasetteConnection("http://localhost", "demo")' in body
+    # the SQL cell queries this table, not a placeholder
+    assert "SELECT * FROM people LIMIT 10" in body
+    assert "<table>" not in body
+
+
+@pytest.mark.asyncio
+async def test_marimo_section_on_database_uses_table_placeholder(db_path):
+    """The database page has no single table, so the SQL cell uses a placeholder."""
+    ds = Datasette([db_path])
+    body = (await ds.client.get("/demo/llms.txt")).text
+    assert "## Analyze in a marimo notebook" in body
+    assert "from moutils.db.datasette import DatasetteConnection" in body
+    assert 'DatasetteConnection("http://localhost", "demo")' in body
+    assert "SELECT * FROM <table> LIMIT 10" in body
+
+
+@pytest.mark.asyncio
+async def test_marimo_connection_url_respects_base_url_setting(db_path):
+    """The connection URL includes the configured base_url path prefix."""
+    ds = Datasette([db_path], settings={"base_url": "/prefix/"})
+    body = (await ds.client.get("/demo/people/llms.txt")).text
+    assert 'DatasetteConnection("http://localhost/prefix", "demo")' in body
 
 
 @pytest.mark.asyncio

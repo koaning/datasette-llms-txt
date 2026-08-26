@@ -8,6 +8,31 @@ Write every entry in Simplified Technical English. Apply the
 `simplified-technical-english` skill before you add or edit an entry. See
 [AGENTS.md](AGENTS.md) for the rule.
 
+## [0.3.0] - 2026-08-25
+
+### Added
+
+- Add an "Analyze in a marimo notebook" section to the index, database, and table
+  pages. The section shows how to query the data in a
+  [marimo](https://marimo.io) notebook. It gives a `moutils[db]`
+  `DatasetteConnection` example and a SQL cell example. The connection example
+  uses the absolute URL of the instance.
+
+### Changed
+
+- Replace the "Columns" section on the table page with a shorter "Column notes"
+  section. The "Schema" section already shows the column names, the types, and the
+  keys. The new section shows only the human-written column descriptions. If no
+  column has a description, the plugin does not add the section.
+
+### Removed
+
+- Remove the JSON download option from the "Downloading the full dataset" section
+  on the table page. The section now shows the CSV download. CSV is a lighter
+  format for a full download.
+- Remove the "Primary key" line from the table page. The "Schema" section already
+  shows the primary key.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added

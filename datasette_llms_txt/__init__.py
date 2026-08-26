@@ -8,8 +8,8 @@ def _markdown(body):
     return Response(body, content_type="text/markdown; charset=utf-8")
 
 
-async def _index(datasette):
-    return Response.text(await generate_index(datasette))
+async def _index(datasette, request):
+    return Response.text(await generate_index(datasette, request))
 
 
 async def _database_body(datasette, request):
@@ -17,7 +17,7 @@ async def _database_body(datasette, request):
     db_name = tilde_decode(request.url_vars["db"])
     if db_name not in _visible_databases(datasette):
         return Response.text("Database not found\n", status=404)
-    return await generate_database(datasette, db_name)
+    return await generate_database(datasette, db_name, request)
 
 
 async def _table_body(datasette, request):
@@ -29,7 +29,7 @@ async def _table_body(datasette, request):
     db = datasette.databases[db_name]
     if not await db.table_exists(table):
         return Response.text("Table not found\n", status=404)
-    return await generate_table(datasette, db_name, table)
+    return await generate_table(datasette, db_name, table, request)
 
 
 async def _database(datasette, request):
