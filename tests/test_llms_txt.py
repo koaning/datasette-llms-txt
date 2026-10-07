@@ -131,6 +131,40 @@ async def test_column_notes_omitted_without_descriptions(db_path):
     assert "## Column notes" not in body
 
 
+@pytest.mark.asyncio
+async def test_description_newlines_do_not_break_layout(db_path):
+    """Metadata descriptions with stray newlines must not split bullets or add
+    blank lines inside a list. Each description stays on its own single line."""
+    metadata = {
+        "description": "Instance summary.\n",
+        "databases": {
+            "demo": {
+                "description": "A demo database\nwith a wrapped description.\n",
+                "tables": {
+                    "people": {"description": "One row per person.\n"},
+                    "dogs": {"description": "\n  Good dogs.  \n"},
+                },
+            }
+        },
+    }
+    ds = Datasette([db_path], metadata=metadata)
+
+    body = (await ds.client.get("/llms.txt")).text
+    # No blank line ever opens up inside a list because of a trailing newline.
+    assert "\n\n\n" not in body
+    # The wrapped database description is collapsed onto the one bullet line.
+    assert (
+        "- [demo](/demo.md): A demo database with a wrapped description." in body
+    )
+    # Table bullets stay single-line and keep their row-count prefix.
+    assert "- [demo/people](/demo/people.md): 3 rows; One row per person." in body
+    assert "- [demo/dogs](/demo/dogs.md): 2 rows; Good dogs." in body
+
+    # The `>` summary blockquote carries no embedded newline either.
+    table_body = (await ds.client.get("/demo/people/llms.txt")).text
+    assert "> One row per person." in table_body
+
+
 @pytest.mark.skipif(
     HAS_V1_METADATA,
     reason="dict-form column metadata is a Datasette <1.0 input shape; "

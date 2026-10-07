@@ -8,6 +8,16 @@ Write every entry in Simplified Technical English. Apply the
 `simplified-technical-english` skill before you add or edit an entry. See
 [AGENTS.md](AGENTS.md) for the rule.
 
+## [Unreleased]
+
+### Fixed
+
+- Remove the extra blank lines and broken bullets in the generated output. The
+  plugin now removes the newlines from a metadata description before it puts the
+  description on a bullet or a summary line. A description with a trailing or an
+  embedded newline no longer adds a blank line to a list or splits a bullet
+  across two lines.
+
 ## [0.3.0] - 2026-08-25
 
 ### Added

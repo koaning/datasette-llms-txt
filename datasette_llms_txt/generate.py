@@ -23,6 +23,20 @@ QUERY_HELP = (
 )
 
 
+def _clean(value):
+    """Collapse whitespace (including newlines) so metadata descriptions stay
+    on a single line inside bullets and blockquotes.
+
+    Datasette metadata is human-authored and often carries trailing or embedded
+    newlines. Left as-is, those newlines survive the final ``"\\n".join(out)``
+    and turn into stray blank lines inside a list, or split one bullet across
+    two lines.
+    """
+    if not value:
+        return ""
+    return " ".join(str(value).split())
+
+
 def _plugin_config(datasette):
     return datasette.plugin_config("datasette-llms-txt") or {}
 
@@ -135,8 +149,8 @@ def _normalise_column_description(value):
     """Datasette allows a column's metadata to be a plain string or a dict
     with a ``description``/``title`` key. Normalise both to a display string."""
     if isinstance(value, dict):
-        return value.get("description") or value.get("title") or ""
-    return value or ""
+        return _clean(value.get("description") or value.get("title"))
+    return _clean(value)
 
 
 async def _column_description(datasette, db_name, table, column, table_meta):
@@ -211,8 +225,8 @@ async def generate_index(datasette, request):
     metadata = await _instance_metadata(datasette)
     databases = _visible_databases(datasette)
 
-    title = metadata.get("title") or "Datasette"
-    description = metadata.get("description") or (
+    title = _clean(metadata.get("title")) or "Datasette"
+    description = _clean(metadata.get("description")) or (
         f"A Datasette instance serving {len(databases)} "
         f"database{'s' if len(databases) != 1 else ''} as queryable data."
     )
@@ -224,7 +238,7 @@ async def generate_index(datasette, request):
     for db_name, db in databases:
         tables = await _documented_tables(db)
         db_meta = await _db_metadata(datasette, db_name)
-        note = db_meta.get("description") or (
+        note = _clean(db_meta.get("description")) or (
             f"{len(tables)} table{'s' if len(tables) != 1 else ''}"
         )
         url = datasette.urls.database(db_name) + ".md"
@@ -241,8 +255,8 @@ async def generate_index(datasette, request):
             bits = []
             if count is not None:
                 bits.append(f"{count} rows")
-            if tbl_meta.get("description"):
-                bits.append(tbl_meta["description"])
+            if _clean(tbl_meta.get("description")):
+                bits.append(_clean(tbl_meta["description"]))
             elif columns:
                 bits.append("columns: " + ", ".join(columns))
             url = datasette.urls.table(db_name, table) + ".md"
@@ -264,7 +278,7 @@ async def generate_database(datasette, db_name, request):
     db_meta = await _db_metadata(datasette, db_name)
     tables = await _documented_tables(db)
 
-    description = db_meta.get("description") or (
+    description = _clean(db_meta.get("description")) or (
         f"Database `{db_name}` with {len(tables)} "
         f"table{'s' if len(tables) != 1 else ''}."
     )
@@ -278,8 +292,8 @@ async def generate_database(datasette, db_name, request):
         bits = []
         if count is not None:
             bits.append(f"{count} rows")
-        if tbl_meta.get("description"):
-            bits.append(tbl_meta["description"])
+        if _clean(tbl_meta.get("description")):
+            bits.append(_clean(tbl_meta["description"]))
         elif columns:
             bits.append("columns: " + ", ".join(columns))
         url = datasette.urls.table(db_name, table) + ".md"
@@ -314,7 +328,7 @@ async def generate_table(datasette, db_name, table, request):
     columns = await db.table_column_details(table)
     count = await _row_count(db, table)
 
-    description = tbl_meta.get("description") or (
+    description = _clean(tbl_meta.get("description")) or (
         f"Table `{table}` with "
         + (f"{count} rows and " if count is not None else "")
         + f"{len(columns)} column{'s' if len(columns) != 1 else ''}."
